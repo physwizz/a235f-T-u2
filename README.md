@@ -28,7 +28,7 @@ virtualenv -p /usr/bin/python2.7 Vpy27
 
 source Vpy27/bin/activate
 
-cd a235f-T-u1
+cd a235f-T-u2
 
 ./build_kernel.sh
 
