@@ -36,7 +36,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/ccache
-          key: ${{ runner.os }}-kernel-ccache-clang10-${{ github.ref_name }}
+          key: ${{ runner.os }}-kernel-ccache-clang10-${{ github.ref_name }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-kernel-ccache-clang10-
 
