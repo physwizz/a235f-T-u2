@@ -102,7 +102,7 @@ jobs:
           cp source-commit.txt artifacts/source-commit.txt 2>/dev/null || true
           if [[ -s out/arch/arm64/boot/Image ]]; then
             cp out/arch/arm64/boot/Image artifacts/Image
-            sha256sum artifacts/Image | tee artifacts/SHA256SUMS
+            (cd artifacts && sha256sum Image) | tee artifacts/SHA256SUMS
             file artifacts/Image | tee artifacts/image-file-type.txt
           else
             echo 'No kernel Image was produced.' | tee artifacts/BUILD-RESULT.txt
@@ -129,7 +129,17 @@ jobs:
               grep -E '^(CONFIG_MODULE_SIG=|CONFIG_MODULE_SIG_FORCE=|CONFIG_MODULE_FORCE_LOAD=|CONFIG_MODULE_FORCE_UNLOAD=|CONFIG_DEBUG_FS=|CONFIG_SECURITY=|CONFIG_SECURITY_SELINUX=|CONFIG_RANDOMIZE_BASE=|CONFIG_STRICT_KERNEL_RWX=|CONFIG_STRICT_MODULE_RWX=|CONFIG_KALLSYMS_ALL=)' out/.config || true
             } > artifacts/config-audit.txt
           fi
-          find out -type f -name '*.ko' -print 2>/dev/null | head -n 500 > artifacts/module-files.txt || true
+          mkdir -p artifacts/modules
+          while IFS= read -r -d '' module; do
+            rel="${module#out/}"
+            mkdir -p "artifacts/modules/$(dirname "$rel")"
+            cp "$module" "artifacts/modules/$rel"
+          done < <(find out -type f -name '*.ko' -print0 2>/dev/null | head -z -n 500 || true)
+          if find artifacts/modules -type f -name '*.ko' -print -quit | grep -q .; then
+            find artifacts/modules -type f -name '*.ko' -printf '%P\n' | sort > artifacts/module-files.txt
+          else
+            echo 'No kernel modules were staged. Re-run with build_modules=true if modules are required.' > artifacts/module-files.txt
+          fi
           {
             echo 'Artifact inventory:'
             find artifacts -type f -printf '%P %s bytes\n' | sort
