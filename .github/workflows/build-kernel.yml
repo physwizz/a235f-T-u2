@@ -135,6 +135,59 @@ jobs:
             find artifacts -type f -printf '%P %s bytes\n' | sort
           } > artifacts/artifact-inventory.txt
 
+      - name: Validate and summarize device-tree binaries
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, subprocess
+          root = Path("artifacts/device-tree")
+          report = ["Device-tree binary audit", "=========================", ""]
+          files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in (".dtb", ".dtbo")) if root.exists() else []
+          if not files:
+              report += ["FAIL: no DTB/DTBO files found in staged artifacts."]
+          else:
+              report += [f"Found {len(files)} DTB/DTBO files.", ""]
+              invalid = False
+              for p in files:
+                  data = p.read_bytes()
+                  magic = data[:4].hex()
+                  declared = int.from_bytes(data[4:8], "big") if len(data) >= 8 else -1
+                  valid = magic == "d00dfeed" and declared == len(data)
+                  invalid = invalid or not valid
+                  report += [
+                      f"File: {p}",
+                      f"  bytes: {len(data)}",
+                      f"  SHA-256: {hashlib.sha256(data).hexdigest()}",
+                      f"  FDT magic: {magic} ({'OK' if magic == 'd00dfeed' else 'BAD'})",
+                      f"  header total size: {declared} ({'matches file' if declared == len(data) else 'MISMATCH'})",
+                  ]
+                  dtc = Path("tools/dtc")
+                  if dtc.is_file() and dtc.exists():
+                      try:
+                          r = subprocess.run([str(dtc.resolve()), "-I", "dtb", "-O", "dts", str(p.resolve())], capture_output=True, text=True, timeout=30)
+                          if r.returncode == 0:
+                              props = [line.strip() for line in r.stdout.splitlines() if "compatible =" in line or "model =" in line or "board-id" in line or "subtype-id" in line]
+                              report += ["  decompile: OK"] + [f"  {x}" for x in props[:12]]
+                          else:
+                              report += [f"  decompile: FAILED ({r.stderr.strip()[:300]})"]
+                      except Exception as e:
+                          report += [f"  decompile: FAILED ({e})"]
+                  report += [""]
+              overlays = [p for p in files if p.suffix == ".dtbo"]
+              report += [
+                  f"DTBO payload bytes if concatenated without an Android DTBO header/table: {sum(p.stat().st_size for p in overlays)}",
+                  "IMPORTANT: this is a payload-size calculation only. It is NOT a flashable dtbo.img.",
+                  "Do not package or flash these overlays until entry metadata (id/rev/custom fields), board firmware match, and image format are verified.",
+                  ""
+              ]
+              report += ["RESULT: FAIL - at least one DTB/DTBO has an invalid FDT header or size." if invalid else "RESULT: FDT headers and declared sizes pass basic structural checks; device/firmware compatibility is NOT proven."]
+          Path("artifacts/device-tree-audit.txt").write_text("\n".join(report) + "\n")
+          print("\n".join(report))
+          PY
+
       - name: Upload build artifacts
         if: always()
         uses: actions/upload-artifact@v5
