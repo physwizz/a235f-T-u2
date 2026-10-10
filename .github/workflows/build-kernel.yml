@@ -22,7 +22,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Check out source
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
         with:
           fetch-depth: 1
           submodules: recursive
@@ -108,7 +108,7 @@ jobs:
 
       - name: Upload build artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: galaxy-a23-kernel-${{ github.run_number }}
           path: artifacts/
