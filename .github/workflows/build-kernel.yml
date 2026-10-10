@@ -1,0 +1,109 @@
+name: Build Galaxy A23 kernel
+
+"on":
+  workflow_dispatch:
+    inputs:
+      build_modules:
+        description: Also build kernel modules
+        required: true
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: a235f-t-u2-manual-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          submodules: recursive
+
+      - name: Install host dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bc bison build-essential cpio flex git libelf-dev libssl-dev lz4 python3 rsync unzip zip
+
+      - name: Validate bundled toolchains
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          GCC_PREFIX="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
+          DTC="$GITHUB_WORKSPACE/tools/dtc"
+          test -x "${GCC_PREFIX}gcc" || { echo '::error::Bundled GCC cross-compiler missing or not executable'; exit 1; }
+          test -x "$CLANG" || { echo '::error::Bundled Clang missing or not executable'; exit 1; }
+          test -x "$DTC" || { echo '::error::tools/dtc missing or not executable'; exit 1; }
+          "${GCC_PREFIX}gcc" --version | head -n 1
+          "$CLANG" --version | head -n 1
+          git rev-parse HEAD | tee source-commit.txt
+          git status --short
+
+      - name: Configure and build kernel
+        shell: bash
+        env:
+          LC_ALL: C
+        run: |
+          set -Eeuo pipefail
+          cd "$GITHUB_WORKSPACE"
+          mkdir -p out artifacts
+          {
+            echo "Build started: $(date -u +'%Y-%m-%dT%H:%M:%SZ')"
+            echo "Commit: $(git rev-parse HEAD)"
+            uname -a
+            nproc
+            free -h
+          } | tee artifacts/build-info.txt
+          export ARCH=arm64
+          GCC_PREFIX="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
+          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
+          DTC="$GITHUB_WORKSPACE/tools/dtc"
+          make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+            "DTC_EXT=$DTC" CONFIG_BUILD_ARM64_DT_OVERLAY=y ARCH=arm64 \
+            CROSS_COMPILE="$GCC_PREFIX" REAL_CC="$CLANG" \
+            CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+            vendor/physwizz_defconfig
+          make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+            "DTC_EXT=$DTC" CONFIG_BUILD_ARM64_DT_OVERLAY=y ARCH=arm64 \
+            CROSS_COMPILE="$GCC_PREFIX" REAL_CC="$CLANG" \
+            CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
+          if [[ "${{ inputs.build_modules }}" == "true" ]]; then
+            make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+              "DTC_EXT=$DTC" CONFIG_BUILD_ARM64_DT_OVERLAY=y ARCH=arm64 \
+              CROSS_COMPILE="$GCC_PREFIX" REAL_CC="$CLANG" \
+              CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_SECTION_MISMATCH_WARN_ONLY=y modules
+          fi
+
+      - name: Stage outputs for inspection
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          mkdir -p artifacts
+          cp source-commit.txt artifacts/source-commit.txt 2>/dev/null || true
+          if [[ -s out/arch/arm64/boot/Image ]]; then
+            cp out/arch/arm64/boot/Image artifacts/Image
+            sha256sum artifacts/Image | tee artifacts/SHA256SUMS
+            file artifacts/Image | tee artifacts/image-file-type.txt
+          else
+            echo 'No kernel Image was produced.' | tee artifacts/BUILD-RESULT.txt
+          fi
+          [[ ! -f out/.config ]] || cp out/.config artifacts/kernel.config
+          find out -type f -name '*.ko' -print 2>/dev/null | head -n 500 > artifacts/module-files.txt || true
+
+      - name: Upload build artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: galaxy-a23-kernel-${{ github.run_number }}
+          path: artifacts/
+          if-no-files-found: warn
+          retention-days: 14
