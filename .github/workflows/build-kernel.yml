@@ -82,6 +82,10 @@ jobs:
             ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
             CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
+          make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+            CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y dtbs
           if [[ "${{ inputs.build_modules }}" == "true" ]]; then
             make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
               ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
@@ -89,12 +93,12 @@ jobs:
               CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y modules
           fi
 
-      - name: Stage outputs for inspection
+      - name: Stage outputs and audit configuration
         if: always()
         shell: bash
         run: |
           set -u
-          mkdir -p artifacts
+          mkdir -p artifacts/device-tree
           cp source-commit.txt artifacts/source-commit.txt 2>/dev/null || true
           if [[ -s out/arch/arm64/boot/Image ]]; then
             cp out/arch/arm64/boot/Image artifacts/Image
@@ -104,7 +108,32 @@ jobs:
             echo 'No kernel Image was produced.' | tee artifacts/BUILD-RESULT.txt
           fi
           [[ ! -f out/.config ]] || cp out/.config artifacts/kernel.config
+          if [[ -d out/arch/arm64/boot ]]; then
+            find out/arch/arm64/boot -type f \( -name '*.dtb' -o -name '*.dtbo' \) -print | sort > artifacts/device-tree-files.txt
+            while IFS= read -r dtfile; do
+              [[ -n "$dtfile" ]] || continue
+              mkdir -p "artifacts/device-tree/$(dirname "${dtfile#out/arch/arm64/boot/}")"
+              cp "$dtfile" "artifacts/device-tree/${dtfile#out/arch/arm64/boot/}"
+            done < artifacts/device-tree-files.txt
+            if [[ -s artifacts/device-tree-files.txt ]]; then
+              find artifacts/device-tree -type f -print0 | sort -z | xargs -0 -r sha256sum > artifacts/DEVICE-TREE-SHA256SUMS
+            else
+              echo 'No DTB/DTBO files were produced by the build.' > artifacts/DEVICE-TREE-RESULT.txt
+            fi
+          else
+            echo 'Kernel boot output directory was not created.' > artifacts/DEVICE-TREE-RESULT.txt
+          fi
+          if [[ -f out/.config ]]; then
+            {
+              echo 'Configuration flags requiring review (informational; not an automatic vulnerability verdict):'
+              grep -E '^(CONFIG_MODULE_SIG=|CONFIG_MODULE_SIG_FORCE=|CONFIG_MODULE_FORCE_LOAD=|CONFIG_MODULE_FORCE_UNLOAD=|CONFIG_DEBUG_FS=|CONFIG_SECURITY=|CONFIG_SECURITY_SELINUX=|CONFIG_RANDOMIZE_BASE=|CONFIG_STRICT_KERNEL_RWX=|CONFIG_STRICT_MODULE_RWX=|CONFIG_KALLSYMS_ALL=)' out/.config || true
+            } > artifacts/config-audit.txt
+          fi
           find out -type f -name '*.ko' -print 2>/dev/null | head -n 500 > artifacts/module-files.txt || true
+          {
+            echo 'Artifact inventory:'
+            find artifacts -type f -printf '%P %s bytes\n' | sort
+          } > artifacts/artifact-inventory.txt
 
       - name: Upload build artifacts
         if: always()
