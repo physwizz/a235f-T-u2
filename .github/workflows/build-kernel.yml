@@ -32,18 +32,23 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y bc bison build-essential cpio flex git libelf-dev libssl-dev lz4 python3 rsync unzip zip
 
-      - name: Validate bundled toolchains
+      - name: Validate bundled Clang toolchain
         shell: bash
         run: |
           set -Eeuo pipefail
-          GCC_PREFIX="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
-          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
+          TOOLCHAIN="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin"
+          BINUTILS="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+          CLANG="$TOOLCHAIN/clang"
           DTC="$GITHUB_WORKSPACE/tools/dtc"
-          test -x "${GCC_PREFIX}gcc" || { echo '::error::Bundled GCC cross-compiler missing or not executable'; exit 1; }
-          test -x "$CLANG" || { echo '::error::Bundled Clang missing or not executable'; exit 1; }
-          test -x "$DTC" || { echo '::error::tools/dtc missing or not executable'; exit 1; }
-          "${GCC_PREFIX}gcc" --version | head -n 1
+          test -x "$CLANG" || { echo '::error::Bundled Clang is missing or not executable'; exit 1; }
+          test -x "$TOOLCHAIN/clang-10" || { echo '::error::Bundled clang-10 binary is missing or not executable'; exit 1; }
+          test -x "$BINUTILS/aarch64-linux-android-ld.bfd" || { echo '::error::Bundled AArch64 linker is missing or not executable'; exit 1; }
+          test -x "$BINUTILS/aarch64-linux-android-as" || { echo '::error::Bundled AArch64 assembler is missing or not executable'; exit 1; }
+          test -x "$DTC" || { echo '::error::tools/dtc is missing or not executable'; exit 1; }
           "$CLANG" --version | head -n 1
+          "$CLANG" --target=aarch64-linux-gnu -x c -fsyntax-only - <<< 'int main(void) { return 0; }'
+          "$BINUTILS/aarch64-linux-android-ld.bfd" --version | head -n 1
+          "$BINUTILS/aarch64-linux-android-as" --version | head -n 1
           git rev-parse HEAD | tee source-commit.txt
           git status --short
 
@@ -63,23 +68,25 @@ jobs:
             free -h
           } | tee artifacts/build-info.txt
           export ARCH=arm64
-          GCC_PREFIX="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin/aarch64-linux-android-"
-          CLANG="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin/clang"
+          TOOLCHAIN="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin"
+          BINUTILS="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
+          CLANG="$TOOLCHAIN/clang"
           DTC="$GITHUB_WORKSPACE/tools/dtc"
+          CROSS_PREFIX="$BINUTILS/aarch64-linux-android-"
           make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-            "DTC_EXT=$DTC" CONFIG_BUILD_ARM64_DT_OVERLAY=y ARCH=arm64 \
-            CROSS_COMPILE="$GCC_PREFIX" REAL_CC="$CLANG" \
-            CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
+            ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+            CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
             vendor/physwizz_defconfig
           make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-            "DTC_EXT=$DTC" CONFIG_BUILD_ARM64_DT_OVERLAY=y ARCH=arm64 \
-            CROSS_COMPILE="$GCC_PREFIX" REAL_CC="$CLANG" \
-            CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
+            ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+            CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
+            CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
           if [[ "${{ inputs.build_modules }}" == "true" ]]; then
             make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-              "DTC_EXT=$DTC" CONFIG_BUILD_ARM64_DT_OVERLAY=y ARCH=arm64 \
-              CROSS_COMPILE="$GCC_PREFIX" REAL_CC="$CLANG" \
-              CLANG_TRIPLE=aarch64-linux-gnu- CONFIG_SECTION_MISMATCH_WARN_ONLY=y modules
+              ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+              CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
+              CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y modules
           fi
 
       - name: Stage outputs for inspection
