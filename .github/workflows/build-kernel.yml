@@ -30,7 +30,15 @@ jobs:
       - name: Install host dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y bc bison build-essential cpio flex git libelf-dev libssl-dev libtinfo5 lz4 python3 rsync unzip zip
+          sudo apt-get install -y bc bison build-essential ccache cpio flex git libelf-dev libssl-dev libtinfo5 lz4 python3 rsync unzip zip
+
+      - name: Restore compiler cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ${{ runner.os }}-kernel-ccache-clang10-${{ github.ref_name }}
+          restore-keys: |
+            ${{ runner.os }}-kernel-ccache-clang10-
 
       - name: Validate bundled Clang toolchain
         shell: bash
@@ -68,27 +76,32 @@ jobs:
             free -h
           } | tee artifacts/build-info.txt
           export ARCH=arm64
+          export CCACHE_DIR="$HOME/.cache/ccache"
+          export CCACHE_COMPILERCHECK=content
+          mkdir -p "$CCACHE_DIR"
+          ccache --max-size=2G
+          ccache --zero-stats
           TOOLCHAIN="$GITHUB_WORKSPACE/toolchain/llvm-arm-toolchain-ship/10.0/bin"
           BINUTILS="$GITHUB_WORKSPACE/toolchain/gcc/linux-x86/aarch64/aarch64-linux-android-4.9/bin"
           CLANG="$TOOLCHAIN/clang"
           DTC="$GITHUB_WORKSPACE/tools/dtc"
           CROSS_PREFIX="$BINUTILS/aarch64-linux-android-"
-          make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+          make -j"$(nproc)" -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 CC="ccache $CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
             CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y \
             vendor/physwizz_defconfig
-          make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+          make -j"$(nproc)" -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 CC="ccache $CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
             CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y Image
-          make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-            ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+          make -j"$(nproc)" -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+            ARCH=arm64 CC="ccache $CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
             CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
             CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y dtbs
           if [[ "${{ inputs.build_modules }}" == "true" ]]; then
-            make -j2 -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
-              ARCH=arm64 CC="$CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
+            make -j"$(nproc)" -C "$GITHUB_WORKSPACE" O="$GITHUB_WORKSPACE/out" \
+              ARCH=arm64 CC="ccache $CLANG" CROSS_COMPILE="$CROSS_PREFIX" \
               CLANG_TRIPLE=aarch64-linux-gnu- DTC_EXT="$DTC" \
               CONFIG_BUILD_ARM64_DT_OVERLAY=y CONFIG_SECTION_MISMATCH_WARN_ONLY=y modules
           fi
@@ -99,6 +112,7 @@ jobs:
         run: |
           set -u
           mkdir -p artifacts/device-tree
+          ccache --show-stats > artifacts/ccache-stats.txt 2>&1 || true
           cp source-commit.txt artifacts/source-commit.txt 2>/dev/null || true
           if [[ -s out/arch/arm64/boot/Image ]]; then
             cp out/arch/arm64/boot/Image artifacts/Image
