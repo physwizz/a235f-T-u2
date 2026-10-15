@@ -236,7 +236,7 @@ jobs:
               failures.append("FAIL: raw kernel Image is missing.")
           else:
               image_bytes = image.read_bytes()
-              release_match = re.search(rb"Linux version ([^\\x00\\s]+)", image_bytes)
+              release_match = re.search(rb"Linux version ([^\x00\s]+)", image_bytes)
               release = release_match.group(1).decode("ascii", "replace") if release_match else None
               report.append(f"Image size: {len(image_bytes)} bytes")
               report.append(f"Image SHA-256: {hashlib.sha256(image_bytes).hexdigest()}")
@@ -259,7 +259,7 @@ jobs:
               else:
                   for module in modules:
                       data = module.read_bytes()
-                      match = re.search(rb"vermagic=([^\\x00]+)", data)
+                      match = re.search(rb"vermagic=([^\x00]+)", data)
                       vermagic = match.group(1).decode("ascii", "replace") if match else None
                       module_release = vermagic.split()[0] if vermagic else None
                       report.append(f"Module: {module.relative_to(root)}")
@@ -298,8 +298,8 @@ jobs:
 
           report += ["", "RESULT: " + ("FAIL" if failures else "PASS")]
           report += failures
-          (root / "release-audit.txt").write_text("\\n".join(report) + "\\n")
-          print("\\n".join(report))
+          (root / "release-audit.txt").write_text("\n".join(report) + "\n")
+          print("\n".join(report))
           sys.exit(1 if failures else 0)
           PY
 
