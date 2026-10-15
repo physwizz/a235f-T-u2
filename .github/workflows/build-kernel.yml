@@ -170,11 +170,11 @@ jobs:
           root = Path("artifacts/device-tree")
           report = ["Device-tree binary audit", "=========================", ""]
           files = sorted(p for p in root.rglob("*") if p.is_file() and p.suffix in (".dtb", ".dtbo")) if root.exists() else []
+          invalid = not files
           if not files:
               report += ["FAIL: no DTB/DTBO files found in staged artifacts."]
           else:
               report += [f"Found {len(files)} DTB/DTBO files.", ""]
-              invalid = False
               for p in files:
                   data = p.read_bytes()
                   magic = data[:4].hex()
@@ -210,6 +210,8 @@ jobs:
               report += ["RESULT: FAIL - at least one DTB/DTBO has an invalid FDT header or size." if invalid else "RESULT: FDT headers and declared sizes pass basic structural checks; device/firmware compatibility is NOT proven."]
           Path("artifacts/device-tree-audit.txt").write_text("\n".join(report) + "\n")
           print("\n".join(report))
+          if invalid:
+              raise SystemExit("Device-tree structural audit failed; see artifacts/device-tree-audit.txt")
           PY
 
       - name: Upload build artifacts
