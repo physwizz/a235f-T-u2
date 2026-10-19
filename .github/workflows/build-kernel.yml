@@ -130,7 +130,7 @@ jobs:
               cp "$dtfile" "artifacts/device-tree/${dtfile#out/arch/arm64/boot/}"
             done < artifacts/device-tree-files.txt
             if [[ -s artifacts/device-tree-files.txt ]]; then
-              find artifacts/device-tree -type f -print0 | sort -z | xargs -0 -r sha256sum > artifacts/DEVICE-TREE-SHA256SUMS
+              (cd artifacts && find device-tree -type f -print0 | sort -z | xargs -0 -r sha256sum) > artifacts/DEVICE-TREE-SHA256SUMS
             else
               echo 'No DTB/DTBO files were produced by the build.' > artifacts/DEVICE-TREE-RESULT.txt
             fi
@@ -154,9 +154,15 @@ jobs:
           else
             echo 'No kernel modules were staged. Re-run with build_modules=true if modules are required.' > artifacts/module-files.txt
           fi
+          cat > artifacts/PACKAGING-STATUS.txt <<'EOF'
+          STATUS: NOT FLASHABLE
+          This artifact contains a raw kernel Image and separate DTB/DTBO files.
+          It does not contain a verified boot.img, recovery installer, or flashable dtbo.img.
+          Do not flash until the exact device model, firmware/build number, boot-image header and partition format are verified.
+          EOF
           {
             echo 'Artifact inventory:'
-            find artifacts -type f -printf '%P %s bytes\n' | sort
+            find artifacts -type f ! -name 'artifact-inventory.txt' -printf '%P %s bytes\n' | sort
           } > artifacts/artifact-inventory.txt
 
       - name: Validate and summarize device-tree binaries
@@ -212,6 +218,91 @@ jobs:
           print("\n".join(report))
           if invalid:
               raise SystemExit("Device-tree structural audit failed; see artifacts/device-tree-audit.txt")
+          PY
+
+      - name: Verify artifact integrity and kernel-module compatibility
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib, re, sys
+
+          root = Path("artifacts")
+          report = ["Artifact integrity and compatibility audit", "==========================================", ""]
+          failures = []
+
+          image = root / "Image"
+          if not image.is_file():
+              failures.append("FAIL: raw kernel Image is missing.")
+          else:
+              image_bytes = image.read_bytes()
+              release_match = re.search(rb"Linux version ([^\x00\s]+)", image_bytes)
+              release = release_match.group(1).decode("ascii", "replace") if release_match else None
+              report.append(f"Image size: {len(image_bytes)} bytes")
+              report.append(f"Image SHA-256: {hashlib.sha256(image_bytes).hexdigest()}")
+              report.append(f"Kernel release: {release or 'NOT FOUND'}")
+              sums = root / "SHA256SUMS"
+              if not sums.is_file():
+                  failures.append("FAIL: SHA256SUMS is missing.")
+              else:
+                  fields = sums.read_text().split()
+                  expected = fields[0] if fields else ""
+                  actual = hashlib.sha256(image_bytes).hexdigest()
+                  if expected != actual:
+                      failures.append("FAIL: Image SHA-256 does not match SHA256SUMS.")
+                  else:
+                      report.append("Image checksum: PASS")
+
+              modules = sorted((root / "modules").rglob("*.ko")) if (root / "modules").exists() else []
+              if not modules:
+                  report.append("Module vermagic check: SKIPPED (no .ko files staged)")
+              else:
+                  for module in modules:
+                      data = module.read_bytes()
+                      match = re.search(rb"vermagic=([^\x00]+)", data)
+                      vermagic = match.group(1).decode("ascii", "replace") if match else None
+                      module_release = vermagic.split()[0] if vermagic else None
+                      report.append(f"Module: {module.relative_to(root)}")
+                      report.append(f"  vermagic: {vermagic or 'NOT FOUND'}")
+                      if not release or module_release != release:
+                          failures.append(f"FAIL: {module.relative_to(root)} vermagic does not match Image kernel release.")
+                      else:
+                          report.append("  release match: PASS")
+
+          dt_root = root / "device-tree"
+          dt_files = sorted([*dt_root.rglob("*.dtb"), *dt_root.rglob("*.dtbo")]) if dt_root.exists() else []
+          for path in dt_files:
+              data = path.read_bytes()
+              declared = int.from_bytes(data[4:8], "big") if len(data) >= 8 else -1
+              if data[:4] != bytes.fromhex("d00dfeed") or declared != len(data):
+                  failures.append(f"FAIL: invalid FDT header/size: {path.relative_to(root)}")
+          report.append(f"Device-tree structural checks: {len(dt_files)} file(s) checked")
+
+          manifest = root / "DEVICE-TREE-SHA256SUMS"
+          if manifest.is_file():
+              for line in manifest.read_text().splitlines():
+                  if not line.strip():
+                      continue
+                  fields = line.split(None, 1)
+                  if len(fields) != 2:
+                      failures.append("FAIL: malformed DEVICE-TREE-SHA256SUMS entry.")
+                      continue
+                  expected, relpath = fields[0], fields[1].strip().lstrip("*")
+                  target = root / relpath
+                  if not target.is_file() or hashlib.sha256(target.read_bytes()).hexdigest() != expected:
+                      failures.append(f"FAIL: device-tree checksum mismatch/missing file: {relpath}")
+              if not failures:
+                  report.append("Device-tree checksums: PASS")
+          elif dt_files:
+              failures.append("FAIL: DEVICE-TREE-SHA256SUMS is missing.")
+
+          report += ["", "RESULT: " + ("FAIL" if failures else "PASS")]
+          report += failures
+          (root / "release-audit.txt").write_text("\n".join(report) + "\n")
+          print("\n".join(report))
+          sys.exit(1 if failures else 0)
           PY
 
       - name: Upload build artifacts
